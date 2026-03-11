@@ -6,9 +6,14 @@ from mathutils import Vector
 from math import sin, cos, pi 
 from functools import partial
 
-from blade import create_surface, create_d_peg, d_peg_radius, create_blade
+from blade import create_blade 
+from utils import create_surface, create_d_peg
+from utils import SEGMENTS, BAR_DIAMETER, BAR_RADIUS, HILT_LENGTH_ONE_HAND, CROSSGUARD_NORMAL, CROSSGUARD_THICKNESS, CROSSGUARD_DEPTH, DEFAULT_PEG_RADIUS, DEFAULT_SLOT_RADIUS
 
 from typing import Dict, List, Tuple, Optional, Union, Any
+
+# Parameters. See utils for the one imported.
+
 
 def offset_point(point, offset_value: float, offset_index: int):
     point = list(point)
@@ -61,8 +66,10 @@ def create_diamond_shape(bm, offset=(0, 0, 0), direction_index=1, radius=0.03, l
     # return the faces that formed at the start point
     return bm, [ps[0] for ps in ordered_points]
         
-def create_cylinder(bm, center=(0, 0, 0), radius=1.0, height=2.0, segments=16, offset=None):
-    """Crude hilt. A simple cylinder that can be used directly; this one is sealed bottom by default"""
+def create_cylinder(bm, center=(0, 0, 0), radius=BAR_RADIUS, height=-HILT_LENGTH_ONE_HAND, segments=SEGMENTS, offset=None):
+    """Crude hilt. A simple cylinder that can be used directly; this one is sealed bottom by default 
+    This should be aliased into create_generic_hilt.
+    """
     top_verts = []
     bottom_verts = []
     if offset:
@@ -96,9 +103,7 @@ def create_cylinder(bm, center=(0, 0, 0), radius=1.0, height=2.0, segments=16, o
 
     return bm, bottom_verts
 
-d_slot_radius = d_peg_radius + 0.005
-
-def create_basic_hilt(bm, offset=(0, 0, 0), crossguard_dim=(1.0, 0.2, 0.08), hilt_dim=(0.08, 0.75), slot_radius: float=d_slot_radius):
+def create_basic_hilt(bm, offset=(0, 0, 0), crossguard_dim=(1.0, 0.2, 0.08), hilt_dim=(0.08, 0.75), slot_radius: float=DEFAULT_SLOT_RADIUS):
     """Version 1: very basic crucifix hilt with diamond-shaped tips and pommels."""
     clength, cwidth, cdepth = crossguard_dim 
     hradius, hlength = hilt_dim 
@@ -137,10 +142,12 @@ def create_basic_hilt(bm, offset=(0, 0, 0), crossguard_dim=(1.0, 0.2, 0.08), hil
 
 
 
-def create_generic_crossguard(bm, offset=(0, 0, 0), length: float=1.0, width: float=0.2, depth: float=0.08, tip_width: float=0.1):
-    """Simple straight crossguard, only taper from width to tip_width."""
+def create_generic_crossguard(bm, offset=(0, 0, 0), length: float=CROSSGUARD_NORMAL*2, width: float=CROSSGUARD_THICKNESS*2, depth: float=CROSSGUARD_DEPTH, tip_width: float=None):
+    """Simple straight crossguard, only taper from width to tip_width.
+    `length`/`width` are the ENTIRE length/width of the crossguard; so need to x2 on values (which mostly function like radius)
+    """
     ox, oy, oz = offset  
-    tip_width = tip_width or width # if not supply tip_width, use no taper 
+    tip_width = tip_width or depth # if not supply tip_width, use no taper 
     tip_radius, center_radius, depth_radius = tip_width / 2, width / 2, depth / 2
     # fixed creation dimension to y 
     direction_index = 0
@@ -164,8 +171,10 @@ def create_generic_crossguard(bm, offset=(0, 0, 0), length: float=1.0, width: fl
     bottom_verts = [points[i][1] for i in range(3)] + [points[i][2] for i in range(3)][::-1]
     return bm, top_verts, bottom_verts
 
-def create_profiled_crossguard(bm, profile_fn: callable, offset=(0, 0, 0), length: float=1.0, width: float=0.2, depth: float=0.08, tip_width: float=0.1, **kwargs):
-    """Slightly enhanced - a function profile_fn is used to generate a profile of the tip at opposite ends, which will then be linked together in a similar "profile" to the above tapering."""
+def create_profiled_crossguard(bm, profile_fn: callable, offset=(0, 0, 0), length: float=CROSSGUARD_NORMAL*2, width: float=CROSSGUARD_THICKNESS*2, depth: float=CROSSGUARD_DEPTH, tip_width: float=None, **kwargs):
+    """Slightly enhanced - a function profile_fn is used to generate a profile of the tip at opposite ends, which will then be linked together in a similar "profile" to the above tapering.
+    """
+    tip_width = tip_width or depth # if not supply tip_width, use no taper 
     ox, oy, oz = offset 
 #    print(kwargs)
     bm, left_profile = profile_fn(bm, offset=(ox - length/2, oy, oz), original_point=offset, radius=tip_width/2, **kwargs)
@@ -202,7 +211,34 @@ def create_profiled_crossguard(bm, profile_fn: callable, offset=(0, 0, 0), lengt
 
     return bm, top, bottom
 
-def profile_flat_circle(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, segments=16):
+
+def create_profiled_hilt(bm, profile_fn: callable, offset=(0, 0, 0), radius=BAR_RADIUS, height=-HILT_LENGTH_ONE_HAND, segments=SEGMENTS, use_profile_as_base: bool=True, **kwargs):
+    """Similar to create_profiled_crossguard; this allow a profiled function to form the pommel of the hilt and construct the hilt based on this."""
+    ox, oy, oz = offset 
+    profile_offset = (ox, oy, oz+height)
+    bm, profile_surface = profile_fn(bm, offset=profile_offset, original_point=offset, radius=radius, **kwargs)
+    # simply clone the profile into a cylinder around the original offset 
+    if not use_profile_as_base:
+        # explicitly set and use this when profile is of uncertain shape; create a slight offset bottom profile and link them up via create_surface; then replace profile_surface with the new bottom_profile
+        angle_perc = pi * 2 / segments 
+        spaced_height = height * (abs(height) - abs(radius/4)) / abs(height)
+        bottom_profile = [bm.verts.new([ox + sin(angle_perc*i)*radius, oy + cos(angle_perc*i)*radius, oz+spaced_height]) for i in range(segments)]
+        create_surface(bm, bottom_profile, profile_surface)
+        profile_surface = bottom_profile 
+    top_profile = [bm.verts.new([p.co.x, p.co.y, oz]) for p in profile_surface]
+    # regardless of mode; upon reaching here the top_profile and bottom_profile should match completely.
+    for i in range(len(top_profile)):
+        v1 = top_profile[i]
+        v2 = top_profile[(i+1) % len(top_profile)]
+        v3 = profile_surface[(i+1) % len(top_profile)]
+        v4 = profile_surface[i]
+        bm.faces.new([v1, v2, v3, v4])
+    # return the top_profile as is 
+    return bm, top_profile
+
+
+
+def profile_flat_circle(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, segments=SEGMENTS):
     """Simply create a flat circle on offset on Oyz plane."""
     ox, oy, oz = offset
     angle_perc = pi * 2 / segments
@@ -212,7 +248,7 @@ def profile_flat_circle(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=
 
 create_rounded_crossguard = lambda bm, **kwargs: create_profiled_crossguard(bm, profile_flat_circle, **kwargs)
 
-def profile_ball(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, segments=16):
+def profile_ball(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, segments=SEGMENTS):
     """Similar to profile_flat_circle, this return a flat circle as the profile; but it also spawn a ball sqrt2 from the offset. Make this generalized so that it can also be used as part of the hilt mechanism."""
     direction_index = max(range(3), key=lambda i: abs(offset[i]-original_point[i]))
     offset_raw = offset[direction_index] - original_point[direction_index]
@@ -252,37 +288,16 @@ def profile_ball(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, s
     # first iteration recorded will be the profile given for construction
     return bm, all_points[0]
 
+
 create_ball_ended_crossguard = lambda bm, **kwargs: create_profiled_crossguard(bm, profile_ball, **kwargs)
-
-def create_profiled_hilt(bm, profile_fn: callable, offset=(0, 0, 0), radius=1.0, height=2.0, segments=16, use_profile_as_base: bool=True, **kwargs):
-    """Similar to create_profiled_crossguard; this allow a profiled function to form the pommel of the hilt and construct the hilt based on this."""
-    ox, oy, oz = offset 
-    profile_offset = (ox, oy, oz+height)
-    bm, profile_surface = profile_fn(bm, offset=profile_offset, original_point=offset, radius=radius, **kwargs)
-    # simply clone the profile into a cylinder around the original offset 
-    if not use_profile_as_base:
-        # explicitly set and use this when profile is of uncertain shape; create a slight offset bottom profile and link them up via create_surface; then replace profile_surface with the new bottom_profile
-        angle_perc = pi * 2 / segments 
-        spaced_height = height * (abs(height) - abs(radius/4)) / abs(height)
-        bottom_profile = [bm.verts.new([ox + sin(angle_perc*i)*radius, oy + cos(angle_perc*i)*radius, oz+spaced_height]) for i in range(segments)]
-        create_surface(bm, bottom_profile, profile_surface)
-        profile_surface = bottom_profile 
-    top_profile = [bm.verts.new([p.co.x, p.co.y, oz]) for p in profile_surface]
-    # regardless of mode; upon reaching here the top_profile and bottom_profile should match completely.
-    for i in range(len(top_profile)):
-        v1 = top_profile[i]
-        v2 = top_profile[(i+1) % len(top_profile)]
-        v3 = profile_surface[(i+1) % len(top_profile)]
-        v4 = profile_surface[i]
-        bm.faces.new([v1, v2, v3, v4])
-    # return the top_profile as is 
-    return bm, top_profile
-
 create_ball_pommel_hilt = lambda bm, **kwargs: create_profiled_hilt(bm, profile_ball, **kwargs)
 
-def profile_dish(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, dish_thickness=0.02, segments=16):
+def profile_dish(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, dish_thickness=None, segments=SEGMENTS):
     """One of the most common pommel, this is a sideway dish that is aligned with the blade direction. For now this is hardcoded to priortize and follow x axis. Created profile will remain a circle centering on offset.
-    Will still use sqrt2 as it's the cheapest compatible deg for 16 segment mode"""
+    Will still use sqrt2 as it's the cheapest compatible deg for 16 segment models
+    
+    dish_thickness is 2/3 of the radius (thus, 1/3 of diameter) unless explicitly set.
+    """
     ox, oy, oz = offset 
     direction_index = max(range(3), key=lambda i: abs(offset[i]-original_point[i]))
     assert direction_index != 1, "@profile_dish: cannot accept y direction atm"
@@ -295,7 +310,7 @@ def profile_dish(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, d
     cx, cy, cz = center
     front, back = list(), list()
     angle_perc = pi * 2 / segments 
-    thickness = dish_thickness 
+    thickness = dish_thickness or (radius * 0.66)
     for i in range(segments // 8, segments - segments // 8 + 1):
         point = list(center)
         point[direction_index] += -offset_sign*cos(angle_perc*i)*true_radius 
@@ -325,7 +340,7 @@ def profile_dish(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, d
 create_dish_ended_crossguard = lambda bm, **kwargs: create_profiled_crossguard(bm, profile_dish, **kwargs)
 create_dish_hilt = lambda bm, **kwargs: create_profiled_hilt(bm, profile_dish, use_profile_as_base=False, **kwargs)
 
-def profile_nub(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, dish_thickness=0.02, segments=16):
+def profile_nub(bm, offset=(0, 0, 0), original_point=(-1, 0, 0), radius=0.05, segments=SEGMENTS):
     """Stylized round nub; pretty much a ball but with the point cos-diff during the first contacting half"""
     direction_index = max(range(3), key=lambda i: abs(offset[i]-original_point[i]))
     offset_raw = offset[direction_index] - original_point[direction_index]
@@ -378,7 +393,7 @@ create_nub_ended_crossguard = lambda bm, **kwargs: create_profiled_crossguard(bm
 create_nub_pommel_hilt = lambda bm, **kwargs: create_profiled_hilt(bm, profile_nub, **kwargs)
 
 
-def create_expanded_d_peg(bm, center=(0, 0, 0), radius=-0.1, height=-0.04, segments=16, expand_ratio=(1.1, 1.5, 1.0), lug_size:float=0.005, lug_position: float=None):
+def create_expanded_d_peg(bm, center=(0, 0, 0), radius=-0.1, height=-0.04, segments=SEGMENTS, expand_ratio=(1.1, 1.5, 1.0), lug_size:float=0.005, lug_position: float=None):
     """Same d peg but (1) expanded base for firmer peg and (2) with additional lugs to make tighter attach. Since models might not """
     raise NotImplementedError
     verts_top = []
@@ -426,22 +441,22 @@ def create_expanded_d_peg(bm, center=(0, 0, 0), radius=-0.1, height=-0.04, segme
 def create_hilt_format(**kwargs):
     return partial(create_hilt, **kwargs)
 
-def create_hilt(bm, crossguard_fn: callable, hilt_fn: callable, slot_fn: callable=None, crossguard_kwargs: Optional[dict]=dict(), hilt_kwargs: Optional[dict]=dict(), slot_kwargs: Optional[dict]=dict(), no_slot: bool=False):
+def create_hilt(bm, crossguard_generator: callable, hilt_generator: callable, slot_generator: callable=None, crossguard_kwargs: Optional[dict]=dict(), hilt_kwargs: Optional[dict]=dict(), slot_kwargs: Optional[dict]=dict(), no_slot: bool=False):
     """Generalized version in the same vein as create_blade.
-    crossguard_fn should generate the crossguard and return the top and bottom surface suitable for attaching; slot_fn will generate a slotted indent on the top section, hilt_fn will generate the hilt attaching to the bottom section.
-    hilt_fn generate a minifig-compatible hilt that can be held by the minifig neatly.
-    slot_fn is just peg_fn but inverted.
+    crossguard_generator should generate the crossguard and return the top and bottom surface suitable for attaching; slot_generator will generate a slotted indent on the top section, hilt_generator will generate the hilt attaching to the bottom section.
+    hilt_generator generate a minifig-compatible hilt that can be held by the minifig neatly.
+    slot_generator is just peg_generator but inverted.
     """
-    bm, top, bottom = crossguard_fn(bm, **crossguard_kwargs)
+    bm, top, bottom = crossguard_generator(bm, **crossguard_kwargs)
     # create the hilt
-    bm, hilt_bottom = hilt_fn(bm, **hilt_kwargs)
+    bm, hilt_bottom = hilt_generator(bm, **hilt_kwargs)
     # restructure and join the bottom together.
     create_surface(bm, hilt_bottom, bottom)
     if no_slot:
         # if engaging no_peg, return the surface to connect
         return bm, top
     # create the slot for inserting blade peg
-    bm, slot_base = slot_fn(bm, **slot_kwargs)
+    bm, slot_base = slot_generator(bm, **slot_kwargs)
     create_surface(bm, slot_base, top)
     return bm  
 
@@ -450,9 +465,21 @@ def create_full_blade_format(**kwargs):
 
 def create_full_blade(bm, 
                       blade_generator: callable=None, surface_generator: callable=None, blade_kwargs: Optional[dict]=dict(), surface_kwargs: Optional[dict]=dict(), # these are blade args.
-                      crossguard_fn: callable=None, hilt_fn: callable=None, crossguard_kwargs: Optional[dict]=dict(), hilt_kwargs: Optional[dict]=dict()):
+                      crossguard_generator: callable=None, hilt_generator: callable=None, crossguard_kwargs: Optional[dict]=dict(), hilt_kwargs: Optional[dict]=dict()):
     # simply create the blade and hilt with no_peg and no_slot respectively and join them together 
     bm, blade_surface = create_blade(bm, blade_generator=blade_generator, surface_generator=surface_generator, blade_kwargs=blade_kwargs, surface_kwargs=surface_kwargs, no_peg=True)
-    bm, hilt_surface = create_hilt(bm, crossguard_fn=crossguard_fn, hilt_fn=hilt_fn, crossguard_kwargs=crossguard_kwargs, hilt_kwargs=hilt_kwargs, no_slot=True)
+    # Since crossguard generated at its center; the crossguard need to be generated at -depth/2 and the hilt at -depth
+    crossguard_depth = crossguard_kwargs.get("depth", CROSSGUARD_DEPTH)
+    crossguard_kwargs["offset"] = crossguard_kwargs.get("offset", (0, 0, -crossguard_depth/2))
+    hilt_kwargs["offset"] = hilt_kwargs.get("offset", (0, 0, -crossguard_depth))
+    bm, hilt_surface = create_hilt(bm, crossguard_generator=crossguard_generator, hilt_generator=hilt_generator, crossguard_kwargs=crossguard_kwargs, hilt_kwargs=hilt_kwargs, no_slot=True)
     create_surface(bm, blade_surface, hilt_surface)
-    return bm
+    return bm 
+
+# all combination that is working relatively OK. Organized as pair of crossguard_generator/hilt_generator
+HILT_VARIATIONS = {
+        "plain": (create_generic_crossguard, create_cylinder), 
+        "ball": (create_ball_ended_crossguard, create_ball_pommel_hilt),
+        "dish": (create_dish_ended_crossguard, create_dish_hilt),
+        "nub": (create_nub_ended_crossguard, create_nub_pommel_hilt)
+}

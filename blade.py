@@ -6,17 +6,25 @@ from mathutils import Vector
 from math import sin, cos, pi, atan2 
 from functools import partial
 
-from utils import create_surface, create_meshes, form_side_surfaces
+from utils import create_surface, create_meshes, form_side_surfaces, create_d_peg
+from utils import SEGMENTS, BLADE_THICKNESS, BLADE_WIDTH, BLADE_LENGTH_DEFAULT, BLADE_LENGTH_LONG, BLADE_LENGTH_MASSIVE
 
 from typing import Dict, List, Tuple, Optional, Union, Any
 
-# Parameters
-segments = 16
-radii = base_radius, mid_radius, top_radius = 0.12, 0.08, 0.012
-heights = height1, height2 = 1.8, 0.6  # lower/upper section
-scale = width, thickness = 1.0, 0.5
+# Parameters. See utils for the orignal composition 
+# these defaults are for scaling
+DEFAULT_BLADE_RADII = base_radius, mid_radius, top_radius = 1.0, 0.75, 0.1
+DEFAULT_BLADE_HEIGHTS = (BLADE_LENGTH_DEFAULT*3/4, BLADE_LENGTH_DEFAULT/4)
+LONG_BLADE_HEIGHTS = (BLADE_LENGTH_LONG*7/8, BLADE_LENGTH_LONG/8)
 
-def generate_oval_blade(bm, segments=segments, radii=radii, heights=heights, scale=scale):
+RICASSO_BLADE_RADII = 1.0, 2.0, 0.75, 0.1
+RICASSO_BLADE_HEIGHTS = (BLADE_LENGTH_MASSIVE/8, BLADE_LENGTH_MASSIVE/8, BLADE_LENGTH_MASSIVE/2, BLADE_LENGTH_MASSIVE/4)
+# TODO need the ricasso variant too
+BLADE_WIDTH_RADIUS = BLADE_WIDTH / 2
+BLADE_THICKNESS_RADIUS = BLADE_THICKNESS / 2
+SCALE = (BLADE_WIDTH_RADIUS, BLADE_THICKNESS_RADIUS)
+
+def generate_oval_blade(bm, segments=SEGMENTS, radii=DEFAULT_BLADE_RADII, heights=DEFAULT_BLADE_HEIGHTS, scale=SCALE):
     """Type 1: oval, flattened from a circle, no flourish."""
     # unpack params
     base_radius, mid_radius, top_radius = radii
@@ -50,7 +58,7 @@ def generate_oval_blade(bm, segments=segments, radii=radii, heights=heights, sca
 
     return bm, base_verts
 
-def generate_surfaced_blade(bm, radii=radii, heights=heights, scale=scale, segments=segments):
+def generate_surfaced_blade(bm, radii=DEFAULT_BLADE_RADII, heights=DEFAULT_BLADE_HEIGHTS, scale=SCALE, segments=SEGMENTS):
     """Type 2: oval, flattened from a circle with a prepared surface for the fuller. Should be compatible with create_blade."""
     # unpack params
     base_radius, mid_radius, top_radius = radii
@@ -93,50 +101,6 @@ def generate_surfaced_blade(bm, radii=radii, heights=heights, scale=scale, segme
     flats = [excluded[front_face_index], excluded[back_face_index]]
     return bm, base_verts, flats
 
-
-d_peg_height = -0.1 
-d_peg_radius = 0.04
-
-def create_d_peg(bm, center=(0, 0, 0), radius=d_peg_radius, height=d_peg_height, segments=segments):
-    """Creating a d-peg surface with closed "top" and open "bottom", so surface can join into each other.
-    Will have segments / 2 (curve) + 3 (rectangular) nodes in the bottom. The bottom surface is aligned with center z"""
-    verts_top = []
-    verts_bottom = []
-
-    for i in range(segments):
-        angle = 2 * pi * i / segments
-        # Only keep right half (X ≥ 0)
-        if sin(angle) >= -0.001:
-            x = radius * sin(angle)
-            y = radius * cos(angle)
-            v_bot = bm.verts.new((x + center[0], y + center[1], center[2]))
-            v_top = bm.verts.new((x + center[0], y + center[1], center[2] + height))
-            verts_bottom.append(v_bot)
-            verts_top.append(v_top)
-            # print("added ", cos(angle), sin(angle))
-
-    # Add flat back face on X = -radius
-    v1_bottoms = [bm.verts.new((center[0] - radius, center[1] + y, center[2])) for y in [-radius, 0, radius]]
-    v1_tops = [bm.verts.new((center[0] - radius, center[1] + y, center[2] + height)) for y in [-radius, 0, radius]]
-    verts_bottom.extend(v1_bottoms)
-    verts_top.extend(v1_tops)
-
-    # Side walls
-    size = len(verts_bottom)
-    for i in range(size):
-        v1 = verts_bottom[i]
-        v2 = verts_bottom[(i + 1) % size]
-        v3 = verts_top[(i + 1) % size]
-        v4 = verts_top[i]
-        bm.faces.new([v1, v2, v3, v4])
-
-    # Cap top
-    bm.faces.new(verts_top) 
-    # try to give correctly oriented nodes 
-    # peg_bottom = verts_bottom[-3:] + verts_bottom[:-3]
-    # peg_bottom = verts_bottom[-1:] + verts_bottom[:-1]
-    peg_bottom = verts_bottom
-    return bm, peg_bottom 
 
 
 def create_generic_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, length: float=height1*0.8, depth: float=thickness/8, segment=16):
@@ -190,13 +154,18 @@ def create_generic_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, len
     surface_points = [new_points[0]] + [pa[0] for pa in points_array[1:]][::-1] + points_array[0] + [pa[-1] for pa in points_array[1:]] + [new_points[-1]]
     return bm, surface_points
 
-def create_double_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, distance: float=mid_radius * 0.6, **kwargs):
-    """Reuse the above single fuller; plus adding the flat surface between them."""
+def create_double_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, distance: float=None, **kwargs):
+    """Reuse the above single fuller; plus adding the flat surface between them.
+    width is the total width occupied by the fuller. This should make this consistent with the 1-fuller version too.
+    """
     # create the 1st part with different offset 
-    ox, oy, oz = offset
-    fuller_offset = (width + distance) / 2 # radius + half distance
-    _, fs1 = create_generic_fuller(bm, offset=(ox - fuller_offset, oy, oz), width=width, **kwargs) # fuller_surface_1 etc
-    _, fs2 = create_generic_fuller(bm, offset=(ox + fuller_offset, oy, oz), width=width, **kwargs)
+    ox, oy, oz = offset 
+    if distance is None:
+        distance = width / 5
+    fuller_width = (width - distance) / 2
+    fuller_offset = (fuller_width + distance) / 2 # radius + half distance
+    _, fs1 = create_generic_fuller(bm, offset=(ox - fuller_offset, oy, oz), width=fuller_width, **kwargs) # fuller_surface_1 etc
+    _, fs2 = create_generic_fuller(bm, offset=(ox + fuller_offset, oy, oz), width=fuller_width, **kwargs)
     # add surface between the end half of 1 and the front half of 2. Actually doesn't need any inversion
     count = (len(fs1)+1) // 2
     bm.faces.new(fs1[-count:] + fs2[:count])
@@ -204,10 +173,10 @@ def create_double_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, dist
     return bm, fs1[:count] + fs2[-count:] # + [fs2[0], fs1[-1]] 
 
 
-def generate_ricasso_blade(bm, radii=None, heights=None, scale=scale, segments=segments):
-    """Create a blade with protrusion used for marking the sword ricasso. Radii/Height become 4/3 respectively."""
+def generate_ricasso_blade(bm, radii=RICASSO_BLADE_RADII, heights=RICASSO_BLADE_HEIGHTS, scale=SCALE, segments=SEGMENTS):
+    """Create a blade with protrusion used for marking the sword ricasso. Radii/Height become 4/3 tuple respectively."""
     base_radius, protrude_radius, mid_radius, top_radius = radii
-    hand_height, protrude_height, taper1_height, taper2_height  = heights
+    hand_height, protrude_height, taper1_height, taper2_height = heights
     scale_width, scale_thickness = scale 
     all_points = [list() for _ in range(1+segments // 2 + 1 + 1)] # protrude section will take up segments /2 during iteration as it's half circle
     angle_perc = pi * 2 / segments
@@ -268,3 +237,10 @@ def create_blade(bm, blade_generator: callable, peg_generator: callable=None, su
     create_surface(bm, base, peg_base)
     return bm
 
+# all combination that is working relatively OK. Organized as pair of blade_generator/surface_generator
+BLADE_VARIATIONS = {
+        "plain": (generate_oval_blade, None), 
+        "ricasso": (generate_ricasso_blade, None), 
+        "1fuller": (generate_surfaced_blade, create_generic_fuller), 
+        "2fuller": (generate_surfaced_blade, create_double_fuller)
+}
