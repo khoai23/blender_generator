@@ -103,7 +103,7 @@ def generate_surfaced_blade(bm, radii=DEFAULT_BLADE_RADII, heights=DEFAULT_BLADE
 
 
 
-def create_generic_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, length: float=height1*0.8, depth: float=thickness/8, segment=16):
+def create_generic_fuller(bm, offset=(0, 0, 0), width: float=BLADE_WIDTH*0.8, length: float=BLADE_LENGTH_DEFAULT*0.75, depth: float=BLADE_THICKNESS/8, segment=SEGMENTS):
     """No more trickery. Create a surface representing the fuller that can be appended to a flat-sided blade surface. Biding the outer surface to the blade can be done later as a companion function.
     Return the outer surface later."""
     ox, oy, oz = offset
@@ -154,7 +154,7 @@ def create_generic_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, len
     surface_points = [new_points[0]] + [pa[0] for pa in points_array[1:]][::-1] + points_array[0] + [pa[-1] for pa in points_array[1:]] + [new_points[-1]]
     return bm, surface_points
 
-def create_double_fuller(bm, offset=(0, 0, 0), width: float=mid_radius*1.8, distance: float=None, **kwargs):
+def create_double_fuller(bm, offset=(0, 0, 0), width: float=BLADE_WIDTH*0.8, distance: float=None, **kwargs):
     """Reuse the above single fuller; plus adding the flat surface between them.
     width is the total width occupied by the fuller. This should make this consistent with the 1-fuller version too.
     """

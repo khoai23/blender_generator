@@ -1,1 +1,6 @@
 __pycache__
+*.fbx
+*.obj
+*.blend1
+*.swp
+*.swo

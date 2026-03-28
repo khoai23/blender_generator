@@ -7,7 +7,7 @@ from math import sin, cos, pi
 from functools import partial
 
 from blade import create_blade 
-from utils import create_surface, create_d_peg
+from utils import create_surface, create_d_peg, create_cylinder
 from utils import SEGMENTS, BAR_DIAMETER, BAR_RADIUS, HILT_LENGTH_ONE_HAND, CROSSGUARD_NORMAL, CROSSGUARD_THICKNESS, CROSSGUARD_DEPTH, DEFAULT_PEG_RADIUS, DEFAULT_SLOT_RADIUS
 
 from typing import Dict, List, Tuple, Optional, Union, Any
@@ -65,43 +65,6 @@ def create_diamond_shape(bm, offset=(0, 0, 0), direction_index=1, radius=0.03, l
     bm.faces.new([ps[-2] for ps in ordered_points])
     # return the faces that formed at the start point
     return bm, [ps[0] for ps in ordered_points]
-        
-def create_cylinder(bm, center=(0, 0, 0), radius=BAR_RADIUS, height=-HILT_LENGTH_ONE_HAND, segments=SEGMENTS, offset=None):
-    """Crude hilt. A simple cylinder that can be used directly; this one is sealed bottom by default 
-    This should be aliased into create_generic_hilt.
-    """
-    top_verts = []
-    bottom_verts = []
-    if offset:
-        center = offset
-
-    for i in range(segments):
-        angle = 2 * pi * i / segments
-        x = radius * cos(angle) + center[0]
-        y = radius * sin(angle) + center[1]
-        z_bot = center[2]
-        z_top = center[2] + height
-
-        v_bot = bm.verts.new((x, y, z_bot))
-        v_top = bm.verts.new((x, y, z_top))
-        bottom_verts.append(v_bot)
-        top_verts.append(v_top)
-
-    bm.verts.ensure_lookup_table()
-
-    # Side faces
-    for i in range(segments):
-        v1 = bottom_verts[i]
-        v2 = bottom_verts[(i + 1) % segments]
-        v3 = top_verts[(i + 1) % segments]
-        v4 = top_verts[i]
-        bm.faces.new([v1, v2, v3, v4])
-
-    # Cap top, leave bottom to interact with other sections; TODO consider opposite?
-    bm.faces.new(top_verts)
-#    bm.faces.new(reversed(bottom_verts))
-
-    return bm, bottom_verts
 
 def create_basic_hilt(bm, offset=(0, 0, 0), crossguard_dim=(1.0, 0.2, 0.08), hilt_dim=(0.08, 0.75), slot_radius: float=DEFAULT_SLOT_RADIUS):
     """Version 1: very basic crucifix hilt with diamond-shaped tips and pommels."""
@@ -140,7 +103,8 @@ def create_basic_hilt(bm, offset=(0, 0, 0), crossguard_dim=(1.0, 0.2, 0.08), hil
     create_surface(bm, slot_base, top)
 
 
-
+# this should return the `bottom` verts; which in inverted height actually mean the top ones
+create_generic_hilt = partial(create_cylinder, height=-HILT_LENGTH_ONE_HAND, closed_bottom=False, closed_top=True) 
 
 def create_generic_crossguard(bm, offset=(0, 0, 0), length: float=CROSSGUARD_NORMAL*2, width: float=CROSSGUARD_THICKNESS*2, depth: float=CROSSGUARD_DEPTH, tip_width: float=None):
     """Simple straight crossguard, only taper from width to tip_width.
@@ -478,7 +442,7 @@ def create_full_blade(bm,
 
 # all combination that is working relatively OK. Organized as pair of crossguard_generator/hilt_generator
 HILT_VARIATIONS = {
-        "plain": (create_generic_crossguard, create_cylinder), 
+        "plain": (create_generic_crossguard, create_generic_hilt), 
         "ball": (create_ball_ended_crossguard, create_ball_pommel_hilt),
         "dish": (create_dish_ended_crossguard, create_dish_hilt),
         "nub": (create_nub_ended_crossguard, create_nub_pommel_hilt)
